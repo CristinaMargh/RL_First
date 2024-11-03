@@ -7,6 +7,9 @@ import time
 from wrapper import recv_from_any_link, send_to_link, get_switch_mac, get_interface_name
 
 MAC_table = {}
+priority = 0
+root_bridge_ID = 0
+root_path_cost = 0
 
 def parse_ethernet_header(data):
     # Unpack the header fields from the byte array
@@ -54,7 +57,6 @@ def main():
     # Printing interface names
     for i in interfaces:
         print(get_interface_name(i))
-    vlan_table = {}
     while True:
         # Note that data is of type bytes([...]).
         # b1 = bytes([72, 101, 108, 108, 111])  # "Hello"
@@ -82,7 +84,6 @@ def main():
         # Decomposing the .cfg file
         trunk_links = {}
         regular_links = {}
-
         with open(f"configs/switch{switch_id}.cfg", 'r') as file:
             lines = file.readlines()
             priority = int(lines[0].strip())
@@ -91,42 +92,59 @@ def main():
                 port1 = parts[0]
                 port2 = parts[1]
                 link_type = 'trunk' if parts[1] == 'T' else 'regular'
+                port_status_trunk = 'BLOCKED'
+                port_status_access = 'LISTENING'
 
                 if link_type == 'trunk':
-                    trunk_links[port1] = port2
+                    trunk_links[port1] = {'port2' : port2, 'status' : port_status_trunk}
                 else:
-                    regular_links[port1] = int(port2)
-        # am creat vlan_id is am adaugat headerul in caz ca nu era
-        tagged_frame = data
-        tagged_frame_length = length
-        if vlan_id == -1:
-            port = regular_links[get_interface_name(interface)]
-            if (get_interface_name(interface) in regular_links):
-                port = regular_links[get_interface_name(interface)]
-                vlan_id = port
-                tagged_frame = data[0:12] + create_vlan_tag(vlan_id) + data[12:]
-                tagged_frame_length = length + 4
-
+                    regular_links[port1] = {'port2': int(port2), 'status' : port_status_access}
         
-        if dest_mac in MAC_table:
-            name_next_port = get_interface_name(MAC_table[dest_mac])
-            untagged_frame = tagged_frame[0:12] + tagged_frame[16:]
-            untagged_frame_length = tagged_frame_length - 4
-            # Daca destinatia se afla in tabela switch-ului (avem vlan normal)
-            # trimitem pachetul FARA header (nu e nevoie de el)
-            if name_next_port in regular_links and (regular_links[name_next_port] == vlan_id):
-                send_to_link(MAC_table[dest_mac], untagged_frame_length, untagged_frame)
-            elif name_next_port in trunk_links and (trunk_links[name_next_port] == 'T'):
-                send_to_link(MAC_table[dest_mac], tagged_frame_length, tagged_frame)
+        own_bridge_ID = 0
+
+        if dest_mac == '01:80:c2:00::00::00':
+            #initialize
+            own_bridge_ID = priority
+            root_bridge_ID = own_bridge_ID
+            root_path_cost = 0
+            # If the port becomes root bridge set as designated
+            if own_bridge_ID == root_bridge_ID:
+                for o in interfaces:
+                    if o != interface and (get_interface_name(o)) in trunk_links:
+                        trunk_links[o]['status'] = 'DESIGNATED_PORT'
+
         else:
-            untagged_frame = tagged_frame[0:12] + tagged_frame[16:]
-            untagged_frame_length = tagged_frame_length - 4
-            for o in interfaces:
-                if o != interface and (get_interface_name(o)) in trunk_links:
-                    send_to_link(o, tagged_frame_length, tagged_frame)
-                elif o!= interface and (get_interface_name(o)) in regular_links:
-                    if regular_links[get_interface_name(o)] == vlan_id:
-                        send_to_link(o, untagged_frame_length, untagged_frame)
+            # am creat vlan_id is am adaugat headerul in caz ca nu era
+            tagged_frame = data
+            tagged_frame_length = length
+            if vlan_id == -1:
+                port = regular_links[get_interface_name(interface)]['port2']
+                if (get_interface_name(interface) in regular_links):
+                    port = regular_links[get_interface_name(interface)]['port2']
+                    vlan_id = port
+                    tagged_frame = data[0:12] + create_vlan_tag(vlan_id) + data[12:]
+                    tagged_frame_length = length + 4
+
+            
+            if dest_mac in MAC_table:
+                name_next_port = get_interface_name(MAC_table[dest_mac])
+                untagged_frame = tagged_frame[0:12] + tagged_frame[16:]
+                untagged_frame_length = tagged_frame_length - 4
+                # Daca destinatia se afla in tabela switch-ului (avem vlan normal)
+                # trimitem pachetul FARA header (nu e nevoie de el)
+                if name_next_port in regular_links and (regular_links[name_next_port]['port2'] == vlan_id):
+                    send_to_link(MAC_table[dest_mac], untagged_frame_length, untagged_frame)
+                elif name_next_port in trunk_links and (trunk_links[name_next_port]['port2'] == 'T'):
+                    send_to_link(MAC_table[dest_mac], tagged_frame_length, tagged_frame)
+            else:
+                untagged_frame = tagged_frame[0:12] + tagged_frame[16:]
+                untagged_frame_length = tagged_frame_length - 4
+                for o in interfaces:
+                    if o != interface and (get_interface_name(o)) in trunk_links:
+                        send_to_link(o, tagged_frame_length, tagged_frame)
+                    elif o!= interface and (get_interface_name(o)) in regular_links:
+                        if regular_links[get_interface_name(o)]['port2'] == vlan_id:
+                            send_to_link(o, untagged_frame_length, untagged_frame)
 
         # TODO: Implement STP support
 		
